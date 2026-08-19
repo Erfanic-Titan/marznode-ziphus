@@ -1,12 +1,19 @@
 import json
+import logging
 from collections import defaultdict
 
 import commentjson
 
 from marznode.config import XRAY_EXECUTABLE_PATH, XRAY_VLESS_REALITY_FLOW, DEBUG
-from ._utils import get_x25519
+from ._utils import (
+    derive_vless_encryption,
+    get_mldsa65,
+    get_x25519,
+)
 from ...models import Inbound
 from ...storage import BaseStorage
+
+logger = logging.getLogger(__name__)
 
 transport_map = defaultdict(
     lambda: "tcp",
@@ -151,7 +158,23 @@ class XrayConfig(dict):
                     pvk = tls_settings.get("privateKey")
 
                     x25519 = get_x25519(XRAY_EXECUTABLE_PATH, pvk)
-                    settings["pbk"] = x25519["public_key"]
+                    if x25519:
+                        settings["pbk"] = x25519["public_key"]
+                    else:
+                        # without pbk the client cannot complete the handshake,
+                        # so say so loudly rather than shipping a dead config
+                        logger.error(
+                            "could not derive the reality public key for inbound %s;"
+                            " its configs will not work",
+                            inbound["tag"],
+                        )
+
+                    # optional post-quantum certificate verification (xray >= v25.7.26).
+                    # travels to the client as the "pqv" share-link parameter.
+                    if mldsa65_seed := tls_settings.get("mldsa65Seed"):
+                        mldsa65 = get_mldsa65(XRAY_EXECUTABLE_PATH, mldsa65_seed)
+                        if mldsa65:
+                            settings["pqv"] = mldsa65["verify"]
 
                     settings["sid"] = tls_settings.get("shortIds", [""])[0]
 
@@ -188,6 +211,32 @@ class XrayConfig(dict):
                 elif net == "http":
                     settings["path"] = net_settings.get("path")
                     settings["host"] = net_settings.get("host")
+
+                # the real xray transport name, kept beside the normalised one.
+                # "network" stays as-is because the panel and v2share both key
+                # off the legacy vocabulary; consumers that want the truth
+                # ("raw", "xhttp", ...) should read this instead.
+                settings["network_raw"] = net
+
+                # everything we did not model above, verbatim. new core features
+                # land here automatically, so adding one to the panel no longer
+                # requires a marznode release first.
+                settings["raw_stream"] = stream
+
+            # VLESS Encryption (xray >= v25.9.5). the inbound holds the private
+            # half; clients need the public half, exactly like reality's pbk.
+            if inbound["protocol"] == "vless":
+                decryption = inbound.get("settings", {}).get("decryption")
+                if encryption := derive_vless_encryption(
+                    XRAY_EXECUTABLE_PATH, decryption
+                ):
+                    settings["encryption"] = encryption
+                elif decryption and decryption != "none":
+                    logger.warning(
+                        "inbound %s has a decryption value we cannot derive an"
+                        " encryption value from; clients will not connect",
+                        inbound["tag"],
+                    )
 
             if inbound["protocol"] == "shadowsocks":
                 settings["network"] = None

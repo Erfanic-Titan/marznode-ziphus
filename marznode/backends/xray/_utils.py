@@ -68,6 +68,24 @@ def get_mlkem768(xray_path: str, seed: str = None) -> Dict[str, str] | None:
     return None
 
 
+def get_mldsa65(xray_path: str, seed: str = None) -> Dict[str, str] | None:
+    """
+    get the ML-DSA-65 verify key using the seed
+    :param xray_path:
+    :param seed:
+    :return: ML-DSA-65 seed/verify pair
+    """
+    cmd = [xray_path, "mldsa65"]
+    if seed:
+        cmd.extend(["-i", seed])
+    output = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode("utf-8")
+    match = re.search(r"Seed: (.+)\nVerify: (.+)", output)
+    if match:
+        seed, verify = match.groups()
+        return {"seed": seed, "verify": verify}
+    return None
+
+
 def derive_vless_encryption(
     xray_path: str, decryption: str, rtt: str = "0rtt"
 ) -> str | None:
