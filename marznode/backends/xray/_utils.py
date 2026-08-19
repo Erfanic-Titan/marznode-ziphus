@@ -49,3 +49,76 @@ def get_x25519(xray_path: str, private_key: str = None) -> Dict[str, str] | None
         private, public = match.group("private"), match.group("public")
         return {"private_key": private, "public_key": public}
     return None
+
+def get_mlkem768(xray_path: str, seed: str = None) -> Dict[str, str] | None:
+    """
+    get the ML-KEM-768 client key using the seed
+    :param xray_path:
+    :param seed:
+    :return: ML-KEM-768 seed/client pair
+    """
+    cmd = [xray_path, "mlkem768"]
+    if seed:
+        cmd.extend(["-i", seed])
+    output = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode("utf-8")
+    match = re.search(r"Seed: (.+)\nClient: (.+)", output)
+    if match:
+        seed, client = match.groups()
+        return {"seed": seed, "client": client}
+    return None
+
+
+def derive_vless_encryption(
+    xray_path: str, decryption: str, rtt: str = "0rtt"
+) -> str | None:
+    """
+    derive the client-side "encryption" value from an inbound's "decryption".
+
+    the two strings are structurally identical; only the third field differs
+    (server states a ticket lifetime, client states 0rtt/1rtt) and each key is
+    swapped for its public counterpart. this mirrors how the reality public key
+    is derived from the inbound's private key.
+
+    grammar (see xray's infra/conf/vless.go):
+        mlkem768x25519plus . <native|xorpub|random> . <seconds> . <segment>...
+    where a segment shorter than 20 chars is padding and is copied verbatim,
+    and any other segment is a base64(RawURL) key of 32 bytes (X25519 private)
+    or 64 bytes (ML-KEM-768 seed).
+
+    :param xray_path:
+    :param decryption: the inbound's "decryption" value
+    :param rtt: 0rtt to allow ticket reuse, 1rtt to always handshake
+    :return: the client's "encryption" value, or None if not derivable
+    """
+    if not decryption or decryption == "none":
+        return None
+
+    parts = decryption.split(".")
+    if len(parts) < 4 or parts[0] != "mlkem768x25519plus":
+        return None
+    if parts[1] not in ("native", "xorpub", "random"):
+        return None
+
+    derived = [parts[0], parts[1], rtt]
+    for segment in parts[3:]:
+        if len(segment) < 20:  # padding, not a key
+            derived.append(segment)
+            continue
+        try:
+            size = len(base64.urlsafe_b64decode(segment + "=" * (-len(segment) % 4)))
+        except (ValueError, binascii.Error):
+            return None
+        if size == 32:
+            pair = get_x25519(xray_path, segment)
+            if not pair:
+                return None
+            derived.append(pair["public_key"])
+        elif size == 64:
+            pair = get_mlkem768(xray_path, segment)
+            if not pair:
+                return None
+            derived.append(pair["client"])
+        else:
+            return None
+
+    return ".".join(derived)
