@@ -1,5 +1,11 @@
-FROM tobyxdd/hysteria:v2 AS hysteria-image
-FROM jklolixxs/sing-box:latest AS sing-box-image
+# Sidecar backends. Both were unpinned upstream, and jklolixxs/sing-box has
+# since disappeared from Docker Hub entirely, which breaks the build outright.
+# Use SagerNet's official image and pin both.
+ARG HYSTERIA_IMAGE=tobyxdd/hysteria:v2.12.1
+ARG SING_BOX_IMAGE=ghcr.io/sagernet/sing-box:v1.13.19
+
+FROM ${HYSTERIA_IMAGE} AS hysteria-image
+FROM ${SING_BOX_IMAGE} AS sing-box-image
 
 FROM python:3.12-alpine
 
