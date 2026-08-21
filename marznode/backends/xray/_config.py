@@ -148,6 +148,13 @@ class XrayConfig(dict):
 
                 if security == "tls":
                     settings["tls"] = "tls"
+                    if alpn := tls_settings.get("alpn"):
+                        settings["alpn"] = alpn
+                    settings["sni"] = [
+                        c.get("serverName")
+                        for c in tls_settings.get("certificates", [])
+                        if c.get("serverName")
+                    ]
                 elif security == "reality":
                     settings["fp"] = "chrome"
                     settings["tls"] = "reality"
@@ -195,6 +202,23 @@ class XrayConfig(dict):
                 elif net in ["ws", "websocket", "httpupgrade", "splithttp", "xhttp"]:
                     settings["path"] = net_settings.get("path")
                     settings["host"] = net_settings.get("host")
+
+                    if net in ("splithttp", "xhttp"):
+                        # XHTTP's mode is not cosmetic: a server on "auto"
+                        # speaks packet-up/stream-up, while a client that was
+                        # told nothing defaults to "stream-one" and the POST
+                        # dies with EOF. the panel had no way to learn it
+                        # because it only ever read the host's own field.
+                        settings["xhttp_mode"] = net_settings.get("mode")
+                        extra = net_settings.get("extra") or {}
+                        if isinstance(extra, str):
+                            try:
+                                extra = json.loads(extra)
+                            except ValueError:
+                                extra = {}
+                        settings["xhttp_extra"] = extra or None
+                        if xmux := extra.get("xmux"):
+                            settings["xhttp_xmux"] = xmux
 
                 elif net == "grpc":
                     settings["path"] = net_settings.get("serviceName")
